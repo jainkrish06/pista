@@ -1,0 +1,27 @@
+{
+  "name": "pista",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PISTA - Random 1-to-1 video/text chat platform (18+)",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace=apps/web",
+    "dev:server": "npm run dev --workspace=apps/server",
+    "build:web": "npm run build --workspace=apps/web",
+    "build:server": "npm run build --workspace=apps/server",
+    "db:generate": "npm run generate --workspace=packages/database",
+    "db:migrate": "npm run migrate:dev --workspace=packages/database",
+    "db:studio": "npm run studio --workspace=packages/database",
+    "lint": "npm run lint --workspace=apps/web && npm run lint --workspace=apps/server",
+    "test:server": "npm run test --workspace=apps/server"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}

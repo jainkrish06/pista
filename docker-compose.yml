@@ -1,0 +1,45 @@
+# Local development infrastructure only - zero cost, runs entirely on your
+# machine. Production deployment (managed Postgres/Redis, a real TURN
+# provider or hardened coturn) is addressed in Phase 12.
+name: pista-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pista
+      POSTGRES_PASSWORD: pista_dev_password
+      POSTGRES_DB: pista
+    ports:
+      - "5432:5432"
+    volumes:
+      - pista_postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - pista_redis_data:/data
+
+  # OPTIONAL for early local dev - only needed once you actually want to
+  # exercise the TURN relay path (e.g. simulating symmetric-NAT clients).
+  # STUN alone (a public Google STUN server) is enough for most local tests.
+  coturn:
+    image: coturn/coturn:4.6.2
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - "-n"
+      - "--log-file=stdout"
+      - "--listening-port=3478"
+      - "--realm=pista.local"
+      - "--user=pista:pista_dev_turn_password"
+      - "--lt-cred-mech"
+      - "--no-cli"
+
+volumes:
+  pista_postgres_data:
+  pista_redis_data:

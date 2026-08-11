@@ -1,0 +1,327 @@
+// PISTA data model
+// Design principles:
+//  - Data minimization: only store what's needed for auth, safety, and abuse prevention.
+//  - No content of video/audio calls is ever persisted.
+//  - Sensitive moderation data (IP/risk signals) is isolated from the public-facing Profile
+//    and is never joined into anything returned to ordinary users.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum AuthProvider {
+  EMAIL
+  GOOGLE
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
+  DELETED
+}
+
+enum MatchStatus {
+  WAITING
+  ACTIVE
+  ENDED
+}
+
+enum MatchEndReason {
+  SKIPPED
+  PARTNER_LEFT
+  REPORTED
+  DISCONNECTED
+  TIMEOUT
+}
+
+enum ReportReason {
+  NUDITY_SEXUAL_CONTENT
+  HARASSMENT
+  HATE_ABUSE
+  SPAM_SCAM
+  THREATS
+  UNDERAGE_CONCERN
+  ILLEGAL_ACTIVITY
+  OTHER
+}
+
+enum ReportStatus {
+  PENDING
+  IN_REVIEW
+  ACTIONED
+  DISMISSED
+}
+
+enum BanType {
+  WARNING
+  TEMPORARY
+  PERMANENT
+}
+
+enum ModerationActionType {
+  WARN
+  TEMP_BAN
+  PERMANENT_BAN
+  UNBAN
+  DISMISS_REPORT
+  NOTE_ADDED
+}
+
+enum AdminRole {
+  MODERATOR
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum ConsentType {
+  TERMS_OF_SERVICE
+  PRIVACY_POLICY
+  COMMUNITY_GUIDELINES
+  AGE_CONFIRMATION
+}
+
+enum SubscriptionPlan {
+  FREE
+  PREMIUM
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  EXPIRED
+  PAST_DUE
+}
+
+// ---------------------------------------------------------------------------
+// Core account
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String       @id @default(cuid())
+  email        String       @unique
+  passwordHash String? // null when authProvider is not EMAIL
+  authProvider AuthProvider
+  status       UserStatus   @default(ACTIVE)
+
+  emailVerifiedAt DateTime?
+
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  lastActiveAt DateTime  @default(now())
+  deletedAt    DateTime? // soft delete; personal data anonymized on deletion
+
+  profile      Profile?
+  sessions     Session[]
+  consents     Consent[]
+  subscription Subscription?
+
+  // Matchmaking
+  matchesAsUserA Match[] @relation("MatchUserA")
+  matchesAsUserB Match[] @relation("MatchUserB")
+
+  // Safety
+  reportsFiled     Report[] @relation("ReportsFiled")
+  reportsReceived  Report[] @relation("ReportsReceived")
+  blocksInitiated  Block[]  @relation("BlocksInitiated")
+  blocksReceived   Block[]  @relation("BlocksReceived")
+  bans             Ban[]    @relation("BansOnUser")
+  riskProfile      RiskProfile?
+
+  @@index([status])
+  @@index([email])
+}
+
+// Public-ish profile data. Kept separate from User so that anything shown
+// to a chat partner is explicitly scoped and minimal by construction.
+model Profile {
+  userId      String   @id
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  displayName String
+  gender      String?  // e.g. "MALE", "FEMALE", "OTHER"
+  ageRange    String? // e.g. "18-24" - coarse, optional, never exact birthdate
+  country     String? // only if voluntarily provided
+  interests   String[] @default([])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// Login/refresh sessions. Deliberately minimal.
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash    String   @unique // hash of refresh/session token, never store raw token
+  userAgentTag String? // coarse browser/OS family only, not a full fingerprint
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime
+  revokedAt    DateTime?
+
+  @@index([userId])
+}
+
+// Records acceptance of legal documents so we can prove consent was given.
+model Consent {
+  id          String      @id @default(cuid())
+  userId      String
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        ConsentType
+  version     String // e.g. "2026-01-01" version of the document accepted
+  acceptedAt  DateTime    @default(now())
+
+  @@index([userId, type])
+}
+
+// ---------------------------------------------------------------------------
+// Matchmaking
+// ---------------------------------------------------------------------------
+
+model Match {
+  id        String         @id @default(cuid())
+  userAId   String
+  userA     User           @relation("MatchUserA", fields: [userAId], references: [id])
+  userBId   String
+  userB     User           @relation("MatchUserB", fields: [userBId], references: [id])
+  status    MatchStatus    @default(WAITING)
+  endReason MatchEndReason?
+  startedAt DateTime       @default(now())
+  endedAt   DateTime?
+
+  reports Report[]
+
+  @@index([userAId])
+  @@index([userBId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Safety: reports, blocks, bans, moderation
+// ---------------------------------------------------------------------------
+
+model Report {
+  id             String       @id @default(cuid())
+  reporterId     String
+  reporter       User         @relation("ReportsFiled", fields: [reporterId], references: [id])
+  reportedUserId String
+  reportedUser   User         @relation("ReportsReceived", fields: [reportedUserId], references: [id])
+  matchId        String?
+  match          Match?       @relation(fields: [matchId], references: [id])
+  reason         ReportReason
+  description    String? // optional, length-limited at the application layer
+  status         ReportStatus @default(PENDING)
+  createdAt      DateTime     @default(now())
+  resolvedAt     DateTime?
+  resolvedBy     String? // AdminUser.id
+
+  moderationActions ModerationAction[]
+
+  @@index([reportedUserId, status])
+  @@index([reporterId])
+}
+
+model Block {
+  id              String   @id @default(cuid())
+  blockerId       String
+  blocker         User     @relation("BlocksInitiated", fields: [blockerId], references: [id])
+  blockedUserId   String
+  blockedUser     User     @relation("BlocksReceived", fields: [blockedUserId], references: [id])
+  createdAt       DateTime @default(now())
+
+  @@unique([blockerId, blockedUserId])
+  @@index([blockedUserId])
+}
+
+model Ban {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation("BansOnUser", fields: [userId], references: [id])
+  type      BanType
+  reason    String
+  expiresAt DateTime? // null => permanent
+  createdAt DateTime @default(now())
+  createdBy String // AdminUser.id
+  liftedAt  DateTime?
+  liftedBy  String?
+
+  @@index([userId])
+}
+
+// Privacy-conscious abuse-prevention signals, deliberately isolated from
+// the User/Profile models. Coarse risk signals only — no invasive device
+// fingerprinting, no precise location, no contact/photo/file access.
+model RiskProfile {
+  userId          String   @id
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ipHash          String? // hashed, not raw IP
+  deviceRiskScore Int      @default(0)
+  reportCount     Int      @default(0)
+  lastFlaggedAt   DateTime?
+  updatedAt       DateTime @updatedAt
+}
+
+// Every administrative action taken against a report or a user.
+model ModerationAction {
+  id        String               @id @default(cuid())
+  adminId   String
+  admin     AdminUser            @relation(fields: [adminId], references: [id])
+  reportId  String?
+  report    Report?              @relation(fields: [reportId], references: [id])
+  type      ModerationActionType
+  targetUserId String
+  notes     String? // internal-only notes, never shown to users
+  createdAt DateTime             @default(now())
+
+  @@index([targetUserId])
+  @@index([adminId])
+}
+
+model AdminUser {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  role         AdminRole @default(MODERATOR)
+  createdAt    DateTime  @default(now())
+  disabledAt   DateTime?
+
+  moderationActions ModerationAction[]
+  auditLogs         AuditLog[]
+}
+
+// Immutable trail of admin actions for accountability.
+model AuditLog {
+  id           String    @id @default(cuid())
+  adminId      String
+  admin        AdminUser @relation(fields: [adminId], references: [id])
+  action       String // short machine-readable action name, e.g. "ban.create"
+  targetUserId String?
+  metadata     Json? // structured, non-sensitive context only
+  createdAt    DateTime  @default(now())
+
+  @@index([adminId])
+  @@index([targetUserId])
+}
+
+// ---------------------------------------------------------------------------
+// Future-ready monetization (not activated in V1)
+// ---------------------------------------------------------------------------
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  userId               String             @unique
+  user                 User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan                 SubscriptionPlan   @default(FREE)
+  status               SubscriptionStatus @default(ACTIVE)
+  externalCustomerId   String? // e.g. payment-provider customer id
+  currentPeriodEndsAt  DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+}
