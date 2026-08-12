@@ -14,8 +14,7 @@ RUN npm ci
 COPY packages/shared ./packages/shared/
 COPY apps/web ./apps/web/
 
-# Build Shared packages and Web client application
-RUN npm run build --workspace=packages/shared
+# Build Web client application
 RUN npm run build --workspace=apps/web
 
 # Stage 2: Production Lightweight Runtime stage
@@ -34,7 +33,7 @@ COPY packages/shared/package.json ./packages/shared/
 RUN npm ci --omit=dev
 
 # Copy compiled resources and Next.js optimization artifacts
-COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
+COPY --from=builder /app/packages/shared ./packages/shared
 COPY --from=builder /app/apps/web/.next ./apps/web/.next
 COPY --from=builder /app/apps/web/public ./apps/web/public
 

@@ -22,6 +22,8 @@
     "node": ">=20.0.0"
   },
   "devDependencies": {
+    "ajv": "^8.20.0",
+    "netlify-cli": "^27.1.1",
     "typescript": "^5.5.4"
   }
 }
